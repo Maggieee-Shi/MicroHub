@@ -1,0 +1,89 @@
+# Postgres backing store for user-service. Deployed as a single-replica
+# Deployment + PersistentVolumeClaim rather than a StatefulSet: a demo
+# project doesn't need Postgres HA, but it does need the data to survive a
+# pod restart, which is what the PVC is for.
+apiVersion: v1
+kind: Secret
+metadata:
+  name: postgres-credentials
+  namespace: microhub
+type: Opaque
+stringData:
+  POSTGRES_USER: microhub
+  POSTGRES_PASSWORD: change-me-in-production
+  POSTGRES_DB: microhub
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: postgres-data
+  namespace: microhub
+spec:
+  accessModes:
+    - ReadWriteOnce
+  resources:
+    requests:
+      storage: 1Gi
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: postgres
+  namespace: microhub
+spec:
+  replicas: 1
+  strategy:
+    type: Recreate # a single ReadWriteOnce volume can't be mounted by two pods at once
+  selector:
+    matchLabels:
+      app: postgres
+  template:
+    metadata:
+      labels:
+        app: postgres
+    spec:
+      containers:
+        - name: postgres
+          image: postgres:16-alpine
+          ports:
+            - containerPort: 5432
+          envFrom:
+            - secretRef:
+                name: postgres-credentials
+          volumeMounts:
+            - name: postgres-data
+              mountPath: /var/lib/postgresql/data
+              subPath: pgdata # avoids "lost+found" issues on some CSI volumes
+          readinessProbe:
+            exec:
+              command: ["pg_isready", "-U", "microhub"]
+            initialDelaySeconds: 5
+            periodSeconds: 5
+          livenessProbe:
+            exec:
+              command: ["pg_isready", "-U", "microhub"]
+            initialDelaySeconds: 15
+            periodSeconds: 10
+          resources:
+            requests:
+              cpu: 100m
+              memory: 128Mi
+            limits:
+              cpu: 500m
+              memory: 512Mi
+      volumes:
+        - name: postgres-data
+          persistentVolumeClaim:
+            claimName: postgres-data
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: postgres
+  namespace: microhub
+spec:
+  selector:
+    app: postgres
+  ports:
+    - port: 5432
+      targetPort: 5432

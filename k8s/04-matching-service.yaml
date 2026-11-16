@@ -1,0 +1,68 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: matching-service
+  namespace: microhub
+spec:
+  # Same reasoning as notification-service: swipe/match state here is
+  # in-memory and per-pod. Pinned to 1 replica for the same called-out
+  # reason - see k8s/03-notification-service.yaml.
+  replicas: 1
+  selector:
+    matchLabels:
+      app: matching-service
+  template:
+    metadata:
+      labels:
+        app: matching-service
+    spec:
+      containers:
+        - name: matching-service
+          image: microhub-matching-service:latest
+          ports:
+            - containerPort: 8080
+          env:
+            - name: PORT
+              value: "8080"
+            # Kubernetes' built-in DNS resolves these Service names to the
+            # ClusterIP of the matching Service object automatically - no
+            # hardcoded IPs, no service-discovery library needed.
+            - name: USER_SERVICE_URL
+              value: "http://user-service:8081"
+            - name: NOTIFICATION_SERVICE_URL
+              value: "http://notification-service:8082"
+          readinessProbe:
+            httpGet:
+              path: /healthz
+              port: 8080
+            initialDelaySeconds: 3
+            periodSeconds: 5
+          livenessProbe:
+            httpGet:
+              path: /healthz
+              port: 8080
+            initialDelaySeconds: 5
+            periodSeconds: 10
+          resources:
+            requests:
+              cpu: 50m
+              memory: 32Mi
+            limits:
+              cpu: 250m
+              memory: 128Mi
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: matching-service
+  namespace: microhub
+spec:
+  # The only Service exposed outside the cluster - user-service and
+  # notification-service stay ClusterIP-only (internal), which mirrors how
+  # you'd actually gate a real API surface in production.
+  type: LoadBalancer
+  selector:
+    app: matching-service
+  ports:
+    - port: 80
+      targetPort: 8080
